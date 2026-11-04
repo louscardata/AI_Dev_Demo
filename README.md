@@ -163,3 +163,84 @@ GROUP BY player_id HAVING COUNT(*) > 1;
 
 Compare the row count with the logged source count. The duplicate-key query
 should return no rows. No fixed player count is assumed.
+
+## Regions Bronze job
+
+`resources/regions_bronze.job.yml` defines the separate serverless job
+`regions_bronze`, running the PySpark source notebook `src/regions_bronze.py`.
+The existing bundle includes it through `resources/*.yml`; the player job is
+unchanged. The regions job has no cluster settings, additional dependencies,
+schedule, or dependency on the player job. It permits one concurrent run.
+
+The job reads only
+`/Volumes/ai_dev_class_demo/ai_dev_schema/ai_dev_raw/regions.parquet` and writes
+the managed Delta table `ai_dev_class_demo.bronze_layer.regions`. It preserves
+the eight columns in dictionary order and their actual source types:
+
+| Columns | Local Parquet / Spark type |
+| --- | --- |
+| `id`, `population` | INT64 / BIGINT |
+| `country_code`, `region_type`, `region_name`, `state_province_code` | STRING |
+| `latitude`, `longitude` | DECIMAL(10,6) |
+
+All local types match `docs/regions_data_dictionary.md`. The local file has
+488 rows and both coordinate columns are entirely null, which is allowed.
+All columns are nullable in Parquet metadata; the dictionary-required fields
+`id`, `country_code`, and `region_name` have no actual nulls. IDs are unique.
+These are local observations, not hard-coded counts or verification of the
+remote volume file. Decimal precision is taken from the source; scale must be 6.
+
+Before writing, the notebook validates the exact column set, types, coordinate
+scales, required-field null counts, unique IDs, and non-empty input. An existing
+target must be Delta with matching column order and types. It disables automatic
+schema evolution and performs no casts, repairs, filtering, deduplication, or
+column additions. Nullable fields are allowed. Coordinate ranges, population
+business rules, and player-region relationships remain Silver checks.
+
+The write is a full-table overwrite of a complete region snapshot. Rerunning
+unchanged input produces the same logical contents without appending duplicates.
+Monthly incremental files are not suitable substitutes for the complete input.
+The source must remain unchanged during the run; avoid other target writers.
+Neither local nor volume raw files are modified or deleted.
+
+Logs include the source/target, schema, row counts, validation counts, and
+completion or exceptions without printing region records. Validation failures
+stop before the table write. Post-write checks verify Delta format, schema,
+and source/target row counts; failure does not automatically roll back a commit.
+
+Use the authenticated `AI_DEMO` CLI profile and the same source-volume and
+target-schema/table permissions described for the player job. Validate first:
+
+```powershell
+databricks bundle validate -t dev --profile AI_DEMO
+```
+
+Only after deployment approval, deploy the bundle (which contains both jobs):
+
+```powershell
+databricks bundle deploy -t dev --profile AI_DEMO
+```
+
+Only after execution approval, run the regions job:
+
+```powershell
+databricks bundle run -t dev --profile AI_DEMO regions_bronze
+```
+
+Review the run logs and execute these checks in Databricks:
+
+```sql
+DESCRIBE TABLE ai_dev_class_demo.bronze_layer.regions;
+DESCRIBE DETAIL ai_dev_class_demo.bronze_layer.regions;
+SELECT COUNT(*) FROM ai_dev_class_demo.bronze_layer.regions;
+SELECT id, COUNT(*) AS occurrences
+FROM ai_dev_class_demo.bronze_layer.regions
+GROUP BY id HAVING COUNT(*) > 1;
+SELECT COUNT(*) AS invalid_required_rows
+FROM ai_dev_class_demo.bronze_layer.regions
+WHERE id IS NULL OR country_code IS NULL OR region_name IS NULL;
+```
+
+The count should match the logged source count, the schema should preserve all
+eight source columns and types, duplicate IDs should return no rows, and the
+required-field check should return zero. No fixed region count is assumed.
