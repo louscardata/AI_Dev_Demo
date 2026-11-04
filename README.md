@@ -90,7 +90,7 @@ The notebook reads only
 `/Volumes/ai_dev_class_demo/ai_dev_schema/ai_dev_raw/player_master.parquet`
 and writes the managed Delta table `ai_dev_class_demo.bronze_layer.player_master`.
 It preserves all 20 documented source columns in dictionary order, including
-string dates and the Parquet decimal precisions/scales. It adds no columns and
+string dates and the actual Parquet types and decimal precisions/scales. It adds no columns and
 does not alter or delete the raw file.
 
 This is a full-table overwrite of a complete input, not incremental ingestion.
@@ -105,6 +105,19 @@ Delta tables with matching column order and types; automatic schema evolution
 is disabled. Validation failure stops before the table write. Source values are
 not repaired, filtered, cast, or deduplicated. Region relationships and business
 quality checks are deferred to Silver.
+
+The dictionary specifies `global_percentile` as `DECIMAL` with scale 2, but the
+local supplied Parquet stores it as `STRING` (all 6,908 values are null).
+Bronze accepts either `STRING` for this field or the documented scale-2 decimal,
+logs a warning for the string representation, and preserves it without casting.
+Other fields retain their documented type checks. The local file's `rating` and
+`rating_value` are `DECIMAL(7,3)`; `confidence_score` and `volatility_score` are
+`DECIMAL(4,3)`. Source metadata marks every column nullable, so required-field
+checks inspect actual values rather than relying on Parquet nullability flags.
+Silver is responsible for numeric conversion and value validation of string
+percentiles. Counts are observations of the local file, not hard-coded rules
+or verification of the remote volume file. An existing target with a different
+percentile type still fails the schema guard; this job does not migrate it.
 
 Job output logs the source path, target, schema, row counts, validation counts,
 and completion or exception details without printing player records. After the

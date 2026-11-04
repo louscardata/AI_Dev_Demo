@@ -11,6 +11,8 @@ SOURCE_PATH = "/Volumes/ai_dev_class_demo/ai_dev_schema/ai_dev_raw/player_master
 TARGET_TABLE = "ai_dev_class_demo.bronze_layer.player_master"
 
 # Decimal precision is supplied by Parquet; only scale is fixed by the dictionary.
+# The supplied file represents global_percentile as STRING (all values null).
+# Accept that representation as well as the documented DECIMAL without casting.
 COLUMNS = [
     "player_id", "external_player_key", "first_name", "last_name", "gender",
     "birth_date", "dominant_hand", "home_region_id", "country_code",
@@ -51,6 +53,12 @@ def build_bronze(spark):
                 isinstance(field.dataType, T.DecimalType)
                 and field.dataType.scale == DECIMAL_SCALES[field.name]
             )
+            if field.name == "global_percentile" and isinstance(field.dataType, T.StringType):
+                valid = True
+                logger.warning(
+                    "global_percentile is STRING rather than documented DECIMAL(scale=2); "
+                    "preserving source representation in Bronze; conversion belongs in Silver"
+                )
         else:
             valid = isinstance(field.dataType, T.StringType)
         if not valid:
