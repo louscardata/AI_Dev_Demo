@@ -244,3 +244,59 @@ WHERE id IS NULL OR country_code IS NULL OR region_name IS NULL;
 The count should match the logged source count, the schema should preserve all
 eight source columns and types, duplicate IDs should return no rows, and the
 required-field check should return zero. No fixed region count is assumed.
+
+## Player Silver job
+
+`src/player_silver.py` implements `docs/player_silver_build_instructions.md`.
+`resources/player_silver.job.yml` adds the separate serverless `player_silver`
+job to the existing bundle, with no cluster settings or Bronze job dependencies.
+Both Bronze jobs remain unchanged. Run Silver only after the complete matching
+current-state Bronze player/region pair is available and stable during the run.
+
+The notebook validates required values and blank strings, keys, ISO dates and
+date ordering, numeric conversions without numerical loss, specified ranges,
+rating agreement, home-region references, and country-code consistency. Nulls
+are allowed exactly where specified. The current all-null STRING percentile
+becomes nullable `DECIMAL(18,2)`; future populated strings must also convert
+without numerical loss and fall between 0 and 100. Bronze is never changed.
+
+The two Delta tables `ai_dev_class_demo.silver_layer.player_master_dq_issues`
+and `ai_dev_class_demo.silver_layer.regions_dq_issues` have exactly
+`run_timestamp TIMESTAMP`, `source_table STRING`, `record_id STRING`,
+`issue_code STRING`, and `issue_description STRING`. A shared UTC run timestamp
+identifies findings. Each detected issue is appended; a record may have several
+issues and duplicate business keys need not identify unique physical rows.
+Clean runs create the tables if necessary but append no issue rows. Failed
+validation reports source/issue counts and stops before overwriting Silver.
+
+On success, a player-to-region LEFT JOIN publishes the matched region country
+and exactly the 26 columns in the specified order and types. It fully overwrites
+`ai_dev_class_demo.silver_layer.player_silver`, including its prescribed schema.
+It verifies the schema, row count, and unique player keys before and after writing
+and prints Bronze counts, issue count, and Silver count. A post-write failure
+does not automatically roll back the commit. Valid reruns reproduce logical
+Silver contents; issue history is preserved. No counts are hard-coded.
+
+The execution identity needs SELECT on both Bronze inputs, USE CATALOG/SCHEMA,
+CREATE SCHEMA if needed, CREATE TABLE in Silver, and SELECT/MODIFY on existing
+Silver tables (plus any ownership needed to replace an existing table schema).
+Use the existing authenticated profile to validate:
+
+```powershell
+databricks bundle validate -t dev --profile AI_DEMO
+```
+
+After separate deployment and execution approval:
+
+```powershell
+databricks bundle deploy -t dev --profile AI_DEMO
+databricks bundle run -t dev --profile AI_DEMO player_silver
+```
+
+Deploying the bundle includes all three jobs; running `player_silver` does not
+run either Bronze job. Execute `sql/verify_player_silver.sql` in Databricks to
+compare counts, check duplicate players and unresolved regions, inspect enriched
+rows and null-home behavior, review historical DQ logs, and inspect exact schema.
+The expected current counts are 6,908 players and 488 regions, supplied as context
+only. Incremental processing, extra output fields, automatic repair, quarantine,
+and multi-table transactions are outside this tutorial.
